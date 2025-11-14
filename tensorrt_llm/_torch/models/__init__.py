@@ -42,6 +42,7 @@ __all__ = [
     "Exaone4ForCausalLM",
     "Gemma3ForCausalLM",
     "Gemma3VLM",
+    "Glm4MoeForCausalLM",
     "HCXVisionForCausalLM",
     "HunYuanDenseV1ForCausalLM",
     "HunYuanMoEV1ForCausalLM",

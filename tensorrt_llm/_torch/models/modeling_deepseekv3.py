@@ -52,7 +52,7 @@ from ..attention_backend.interface import PositionalEmbeddingParams, RopeParams
 from ..distributed import (AllReduce, AllReduceFusionOp, AllReduceParams,
                            MoEAllReduce, MoEAllReduceParams, allgather)
 from ..model_config import ModelConfig
-from ..modules.attention import MLA
+from ..modules.attention import Attention, MLA
 from ..modules.decoder_layer import DecoderLayer
 from ..modules.embedding import Embedding
 from ..modules.fused_moe import (DeepSeekV3MoeRoutingMethod,
@@ -1001,6 +1001,32 @@ class Deepseekv3MoE(nn.Module):
             return final_hidden_states
 
 
+class Glm4MoeAttention(Attention):
+    def __init__(self, model_config: ModelConfig[PretrainedConfig], layer_idx: int | None = None):
+        config = model_config.pretrained_config
+        pos_embd_params = PositionalEmbeddingParams(
+            type=PositionEmbeddingType.rope_gpt_neox,
+            rope=RopeParams.from_config(config),
+        )
+        super().__init__(
+            hidden_size=config.hidden_size,
+            num_attention_heads=config.num_attention_heads,
+            num_key_value_heads=config.num_key_value_heads,
+            max_position_embeddings=config.max_position_embeddings,
+            bias=config.attention_bias,
+            pos_embd_params=pos_embd_params,
+            rope_fusion=None,
+            layer_idx=layer_idx,
+            dtype=config.torch_dtype,
+            dense_bias=False,
+            config=model_config,
+            q_scaling=1.0,
+            attention_chunk_size=None, # Should be tuned in case of OOM
+            disable_deep_gemm=False,
+            attn_output_gate=None, # Try True/False
+        )
+
+
 class DeepseekV3DecoderLayer(DecoderLayer):
 
     def __init__(self,
@@ -1026,16 +1052,17 @@ class DeepseekV3DecoderLayer(DecoderLayer):
             #KVCacheManager only support 1 layer for separate draft engine
             layer_idx_for_attention = layer_idx - model_config.pretrained_config.num_hidden_layers
 
-        if config.model_type == "deepseek_v32":
-            self.self_attn = DeepseekV32Attention(
-                model_config,
-                layer_idx=layer_idx_for_attention,
-                aux_stream=aux_stream_dict[AuxStreamType.Attention])
-        else:
-            self.self_attn = DeepseekV3Attention(
-                model_config,
-                layer_idx=layer_idx_for_attention,
-                aux_stream=aux_stream_dict[AuxStreamType.Attention])
+        # if config.model_type == "deepseek_v32":
+        #     self.self_attn = DeepseekV32Attention(
+        #         model_config,
+        #         layer_idx=layer_idx_for_attention,
+        #         aux_stream=aux_stream_dict[AuxStreamType.Attention])
+        # else:
+        #     self.self_attn = DeepseekV3Attention(
+        #         model_config,
+        #         layer_idx=layer_idx_for_attention,
+        #         aux_stream=aux_stream_dict[AuxStreamType.Attention])
+        self.self_attn = Glm4MoeAttention(model_config, layer_idx=layer_idx_for_attention)
         self.enable_attention_dp = mapping.enable_attention_dp
 
         self.mlp_tp_size = mapping.tp_size
